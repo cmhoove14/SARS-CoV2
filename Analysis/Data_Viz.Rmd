@@ -1,0 +1,125 @@
+---
+title: "SARS CoV-2"
+author: "Chris Hoover"
+date: "3/18/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+require(tidyverse)
+require(lubridate)
+
+source("../Data/Hopkins_Data_Load&Clean.R")
+```
+
+```{r plots}
+covid %>% 
+  filter(Country_State %in% c("Italy_", "Spain_", "France_France", "Germany_", "United Kingdom_United Kingdom",
+                              "US_California", "US_Washington", "US_New York") & 
+           Date >= as.Date("2020-03-01")) %>%
+  select(Country_State, Date, `Active Cases`, `New Cases`, Deaths) %>% 
+  pivot_longer(`Active Cases`:Deaths, names_to = "Type", values_to = "Number") %>% 
+  mutate(Type = factor(Type, levels = c("Active Cases", "New Cases", "Deaths")))  %>% 
+  ggplot(aes(x = Date, y = Number, col = Country_State)) +
+    geom_line(size = 1.2) +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    scale_y_continuous(trans = "log",
+                       breaks = c(1,10,100,1000,10000,100000),
+                       labels = c("1", "10", "100", "1k", "10k", "100k")) +
+    scale_x_date(date_labels = "%m/%d", date_breaks = "1 day") +
+    facet_grid(Type~., scales = "free_y") +
+    scale_color_manual(values = c("blue", "black", "green", "gold", "darkred",
+                                  "darkgreen", "grey50", "purple")) +
+    theme(legend.position = "bottom") +
+    labs(x = "Reporting Date",
+         y = "",
+         title = "SARS-CoV2 in Europe and US States")
+
+```
+
+```{r barp}
+covid %>% 
+  filter(Country_State %in% c("Italy_", "Spain_", "France_France", "Germany_", "United Kingdom_United Kingdom",
+                              "US_California", "US_Washington", "US_New York") & 
+           Date >= as.Date("2020-03-01")) %>%
+  select(Country_State, Date, `New Cases`) %>% 
+  ggplot(aes(x = Date, y = `New Cases`, fill = Country_State)) +
+    geom_bar(position = "dodge", stat = "identity") +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+     scale_x_date(date_labels = "%m/%d", date_breaks = "1 day") +
+    scale_fill_manual(values = c("blue", "black", "green", "gold", "darkred",
+                                  "darkgreen", "grey50", "purple")) +
+    theme(legend.position = "bottom") +
+    labs(x = "Reporting Date",
+         y = "",
+         title = "SARS-CoV2 in Europe and US States")
+
+```
+
+
+```{r}
+covid %>% 
+  filter(Country_State %in% c("Italy_", "Spain_", "Korea, South_", "Japan_", 
+                              "US_California", "US_Washington", "US_New York") & 
+           Date >= as.Date("2020-03-01")) %>%
+  select(Country_State, Date, `Active Cases`, `New Cases`, Deaths) %>% 
+  pivot_longer(`Active Cases`:Deaths, names_to = "Type", values_to = "Number") %>% 
+  mutate(Type = factor(Type, levels = c("Active Cases", "New Cases", "Deaths")))  %>% 
+  ggplot(aes(x = Date, y = Number, col = Country_State)) +
+    geom_line(size = 1.2) +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    scale_y_continuous(trans = "log",
+                       breaks = c(1,10,100,1000,10000,100000),
+                       labels = c("1", "10", "100", "1k", "10k", "100k")) +
+    scale_x_date(date_labels = "%m/%d", date_breaks = "1 day") +
+    facet_grid(Type~., scales = "free_y") +
+    scale_color_manual(values = c("green", "red", "darkblue", "gold", 
+                                  "darkgreen", "grey50", "purple")) +
+    theme(legend.position = "bottom") +
+    labs(x = "Reporting Date",
+         y = "",
+         title = "SARS-CoV2 in East Asia, Europe, and US States")
+    
+```
+
+```{r epi_growth}
+covid_growth <- covid %>% 
+  group_by(Country_State) %>% 
+  mutate(g_100 = if_else(Cases > 100, 1, 0),
+         days_since_100 = cumsum(g_100))
+
+covid_growth %>% 
+  filter(Country_State %in% c("Italy_", "Spain_", "Korea, South_", "Japan_", "Germany_",
+                              "US_California", "US_Washington", "US_New York") & 
+           days_since_100 > 1) %>%
+  select(Country_State, days_since_100, `Active Cases`, `New Cases`, Deaths) %>% 
+  ggplot(aes(x = days_since_100, y = `Active Cases`, col = Country_State)) +
+    geom_line(size = 1.2) +
+    theme_bw() +
+    theme(axis.text = element_text(size = 12),
+          axis.title = element_text(size = 14),
+          legend.text = element_text(size = 12)) +
+    scale_y_continuous(trans = "log",
+                       breaks = c(1,10,100,1000,10000,50000),
+                       labels = c("1", "10", "100", "1k", "10k", "50k")) +
+    scale_x_continuous(breaks = c(7,14,21,28)) +
+    scale_color_manual(values = c("black", "green", "red", "darkblue", "gold", 
+                                  "darkgreen", "grey50", "purple"),
+                       labels = c("Germany", "Italy", "Japan", "S. Korea",
+                                  "Spain", "US-California", "US-New York", "US-Washington")) +
+    theme(legend.position = "bottom") +
+    labs(x = "Days Since 100 Cases",
+         y = "Cases",
+         title = "SARS-CoV2 Cases in East Asia, Europe, and US States",
+         subtitle = paste("  Cases as of ", Sys.Date()-1, sep=""),
+         col = "")
+
+ggsave(paste("../Viz/covid_days_since100_", Sys.Date()-1, ".png"),
+       width = 8, height = 6)
+```
+
