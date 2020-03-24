@@ -1,0 +1,14 @@
+---
+title: "COVID-Tracking Data Analyze"
+author: "Chris Hoover"
+date: "3/23/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+require(tidyverse)
+require(lubridate)
+
+covid_track <- read.csv(url("http://covidtracking.com/api/states/daily.csv"))
+```
+

@@ -1,0 +1,60 @@
+Berkeley modeling group meeting 3/23/20
+
+- Primary modeling question: what do we do to get out of the current situation?
+	- How do we get out of shelter in place without returning to outbreak dynamics?
+- Tallying results of the US failure to respond earlier to the outbreak
+	- Needs better data, probably need a postmortem approach
+- Cohort in GA of ~100 basic trainees that had weekly PCR assays
+	- Simple natural immunity based modeling
+	- Presence of antibodies to other CoVs leads to more lung damage?
+- Vaccine product characteristics:
+	- Efficacious against shedding? Severe illness?
+		- Given that should it be targeted to younger groups, older age groups?
+	- Similar questions with Remdesivir -> doesn't seem to work well with late stage disease, needs earlier intervention
+	- Prophylactic effects vs transmission reduction approaches
+	- 0-100% efficacy against shedding vs 0-100% efficacy against illness
+	- "What is required in terms of a vaccination to aid SARS-CoV2 interventions"
+- Justin:
+	- Continued costs in delay to implement more intense restrictions
+		- Especially in nations more vulnerable to rapid spread
+	- How do we start bringing people back into the workforce with antibody screening, etc.
+	- Timeliness questions regarding vaccine rollout
+		- Averted morbidity and mortality associated with timing of vaccine rollout
+- FluTE H1N1 paper Plos CompBio publicly available https://doi.org/10.1371/journal.pcbi.1000656
+- Local Bay Area help
+	- CA doing well at releasing testing data, need high quality estimates of the scope of the outbreak
+		- How big is it now, how big was it dating all the way back to January?
+			- Crosstabs of hospitalization rates, death rates, symptomatic rates
+- Jen: Dynamics associated with school closures and based on where kids end up
+- Graham: Seasonality?
+- Sean: Implementation of models
+	- IDmod's software http://www.idmod.org/docs/cms/
+	- Complications like non-exponentially distributed lags and such
+	- C++ and R code base Sean is working on that may be ready in 4-7 days
+		- Continuous time discrete state model with non-exponentially distributed delays
+		- Graham fitting distributions of latent periods, can be done explicitly
+		- Could have spatial structure, could be at household level and built in metapopulation dynamics
+		- Community and household transmission dynamics (separate FOI for each)
+		- Contact structure: 
+			- https://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1005697
+			- https://doi.org/10.1073/pnas.1008895108
+Data: 
+	- Variation in testing efforts
+	- Covid tracking project (quality of testing, negatives, positives, hospitalizations, deaths, etc.)
+	- Some of the modeling questions can go without super detailed modeling questions
+	- Need solid distributions of same natural history parameters
+		- Incubation period
+		- Duration of shedding (don't have clear estimates yet)
+		- Clinical spectrum from Diamond princess
+			- Where do people end up from positive to resolved
+		- Duration of latent period between infection and symptoms/shedding
+		- Time from symptoms onset to hospitalization OR time from exposure to symptoms onset
+			- Maybe available from Kaiser soon, probably available from China
+	- Github/Slack channels to share data, ideas, code, etc.
+	
+Projects recap:
+	- Impacts/strategies for lifting social distancing policy
+	- Allocation of vaccine/antivirals to mitigate morbidity/mortality/transmission
+	- Working backwards from testing data to get epidemic size through time
+	- Impact of school closures, where kids end up (daycares, at home, with grandparents)
+	- Determinants of second-wave transmission

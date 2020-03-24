@@ -1,0 +1,1244 @@
+---
+title: "Stochastic mod sim"
+author: "Chris Hoover"
+date: "3/23/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE,
+	cache = TRUE,
+	fig.height = 5,
+	fig.width = 8
+)
+
+require(ggplot2)
+require(adaptivetau)
+require(dplyr)
+
+n_sims <- 20
+sim_time <- 365*2
+pop_size <- 2e6
+```
+
+# To-dos  
+## Incorporate interventions into transitions, parameters, rates  
+### Vaccination intervention  
+## Simulate vaccine administered to remaining susceptibles after different outbreak scenarios  
+## Fit deterministic version??  
+## Prettyfy some figures  
+### Dates on x axis  
+### Compare scenarios  
+### Show median result of simulations  
+
+# Model  
+\begin{figure}[!h]
+\includegraphics[]{Mod_Schematic.png}
+\end{figure}
+
+```{r adaptau_mod}
+transitions = list(
+  c(S = -1, E = 1),     #Susceptible becomes exposed
+  c(E = -1, Ia = 1),    #Exposed becomes Infected, pre- or a-symptomatic
+  c(Ia = -1, Is = 1),   #Infected, pre- or a-symptomatic becomes symptomatic
+  c(Ia = -1, R = 1),    #Infected, pre- or a-symptomatic becomes recovered
+  c(Is = -1, R = 1),    #Infected, symptoatmic recovers
+  c(Is = -1, H = 1),    #Infected, symptomatic becomes hospitalized
+  c(H = -1, D = 1),     #Hospitalized, severe becomes Dead
+  c(H = -1, R = 1))     #Hospitalized becomes recovered
+
+rates <- function(x, p, t) {
+  S = x['S']
+  E = x['E']
+  Ia = x['Ia']
+  Is = x['Is']
+  H = x['H']
+  R = x['R']
+  D = x["D"]
+  
+  N = p['N']             #population size
+  beta = p['beta']       #transmission rate
+  ca = p['ca']           #Relative contact rate between S and Ia
+  cs = p['cs']           #Relative contact rate between S and Is
+  ch = p['ch']           #Relative contact rate between S and H
+  gam = p['gam']         #1/serial interval
+  alpha = p['alpha']     #proportion asymptomatic
+  sigma = p['sigma']     #1/(incubation period-serial interval) to model pre-symptomatic transmission
+  rho_s = p['rho_s']     #Recovery rate of symptomatic cases
+  rho_a = p['rho_a']     #Recovery rate of asymptomatic cases
+  lambda =p['lambda']    #proportion symptomatic requiring hospitalization
+  delta_1 = p['delta_1'] #1/time between symptom onset and hospitalization
+  delta_2 = p['delta_2'] #1/time between hospitalization and recovery
+  delta_3 = p['delta_3'] #1/time between hospitalization and mortality
+  mu = p['mu']           #mortality rate of hospitalized cases
+
+  return(c(S*beta*(Ia*ca+Is*cs+H*ch)/N, #Susceptible becomes exposed
+           E*gam,                       #Exposed becomes Infected, pre-/a-symptomatic
+           Ia*(1-alpha)*sigma,          #Infected, pre-/a-symptomatic becomes symptomatic
+           Ia*alpha*rho_a,              #Infected, pre-/a-symptomatic becomes recovered
+           Is*(1-lambda)*rho_s,         #Infected, symptomatic becomes recovered
+           Is*lambda*delta_1,           #Infected, symptomatic becomes hospitalized
+           H*mu*delta_3,                #Hospitalized dies
+           H*(1-mu)*delta_2))           #Hospitalized recovers
+}
+
+```
+
+## Parameters and setup  
+
+```{r mod_setup}
+pars <- c(N = pop_size,            #population size
+          beta = 0.5,         #transmission rate
+          ca = 1.0,           #Relative contact rate between S and Ia
+          cs = 0.6,           #Relative contact rate between S and Is
+          ch = 0.01,          #Relative contact rate between S and H
+          gam = 1/4,          #1/serial interval
+          alpha = 0.32,       #proportion asymptomatic
+          sigma = 1/1.2,      #1/(incubation period-serial interval) to model pre-symptomatic transmission
+          rho_s = 1/14,       #Recovery rate of symptomatic cases
+          rho_a = 1/5,        #Recovery rate of asymptomatic cases
+          lambda = 0.1,       #proportion symptomatic requiring hospitalization
+          delta_1 = 1/6,      #1/time between symptom onset and hospitalization
+          delta_2 = 1/12,     #1/time between hospitalization and recovery
+          delta_3 = 1/9,      #1/time between hospitalization and mortality
+          mu = 0.14           #mortality rate of hospitalized cases
+)
+
+#Function to simulate and return dataframe
+stoch.sim = function(init, trans, rates, pars, t_sim){
+  
+  ssa.sim <- adaptivetau::ssa.adaptivetau(init.values = init, 
+                                          transitions = trans,
+                                          rateFunc = rates,
+                                          params = pars,
+                                          tf=t_sim)
+  
+  return(ssa.sim)
+}  
+
+
+# Run stanford model and plot
+init_vars <- c("S" = pop_size-10,
+               "E" = 10,
+               "Ia" = 0,
+               "Is" = 0,
+               "H" = 0,
+               "R" = 0,
+               "D" = 0)
+
+```
+
+```{r par_table, echo = FALSE, include = TRUE, dev="tikz" }
+tab1 <- data.frame(val = as.character(round(as.numeric(pars), 3)), 
+                   des = c("population size",
+                   "transmission rate",
+                   "Relative contact rate between S and Ia",
+                   "Relative contact rate between S and Is",
+                   "Relative contact rate between S and H",
+                   "1/serial interval",
+                   "proportion asymptomatic",
+                   "1/(incubation period-serial interval) to model pre-symptomatic transmission",
+                   "Recovery rate of symptomatic cases",
+                   "Recovery rate of asymptomatic cases",
+                   "proportion symptomatic requiring hospitalization",
+                   "1/time between symptom onset and hospitalization",
+                   "1/time between hospitalization and recovery",
+                   "1/time between hospitalization and mortality",
+                   "mortality rate of hospitalized cases"
+))
+
+rownames(tab1) <- c("$N$", "$\\beta$","$c_a$","$c_s$","$c_h$",
+                    "$\\gamma$","$\\alpha$", "$\\sigma$", "$\\rho_s$", "$\\rho_a$",
+                    "$\\lambda$","$\\delta_1$","$\\delta_2$","$\\delta_3$","$\\mu$")
+
+knitr::kable(tab1, row.names = TRUE, 
+             col.names = c("Value", "Definition"), 
+             format = "latex", escape = FALSE, 
+             caption = "Parameter values and descriptions used in the model")
+```
+
+## Initial simulations in do nothing setting  
+```{r base_sim_runs}
+init_runs <- bind_rows(lapply(1:n_sims, function(i){
+  as.data.frame(stoch.sim(init = init_vars, 
+                          trans = transitions, 
+                          rates = rates,
+                          pars = pars,
+                          t_sim = sim_time)) %>% 
+    mutate(sim = i)
+  }))
+
+saveRDS(init_runs, file = "../Outputs/adapTau_base_runs.rds")
+
+I_max = max(init_runs$Ia+init_runs$Is + init_runs$H)
+H_max = max(init_runs$H)
+D_max = max(init_runs$D)
+```
+
+```{r base_sim_plot_cases}
+
+init_runs %>% 
+  mutate(I = Is+Ia+H) %>% 
+  dplyr::select(time, I, sim) %>% 
+  ggplot(aes(x = time, y = I, group = as.factor(sim))) +
+    geom_line(size = 0.2, col = "grey50") +
+    theme_bw() +
+    labs(x="time",
+         y = "cases",
+         title = "infecteds through time, no interventions")
+```
+
+```{r base_sim_plot_hosp}
+
+init_runs %>% 
+  select(time, H, sim) %>% 
+  ggplot(aes(x = time, y = H, group = as.factor(sim))) +
+    geom_line(size = 0.2, col = "grey50") +
+    theme_bw() +
+    labs(x="time",
+         y = "hospitalizations",
+         title = "hospitalizations through time, no interventions")
+```
+
+```{r base_sim_plot_deaths}
+
+init_runs %>% 
+  select(time, D, sim) %>% 
+  ggplot(aes(x = time, y = D, group = as.factor(sim))) +
+    geom_line(size = 0.2, col = "grey50") +
+    theme_bw() +
+    labs(x="time",
+         y = "deaths",
+         title = "deaths through time, no interventions")
+
+```
+
+## Model checks  
+### Is asymptomatic transmission alone enough to sustain transmission?  
+
+```{r asym_check}
+pars_asym <- c(N = pop_size,            #population size
+               beta = 0.5,         #transmission rate
+               ca = 1.0,           #Relative contact rate between S and Ia
+               cs = 0,           #Relative contact rate between S and Is
+               ch = 0,          #Relative contact rate between S and H
+               gam = 1/4,          #1/serial interval
+               alpha = 0.32,       #proportion asymptomatic
+               sigma = 1/1.2,      #1/(incubation period-serial interval) to model pre-symptomatic transmission
+               rho_s = 1/14,       #Recovery rate of symptomatic cases
+               rho_a = 1/5,        #Recovery rate of asymptomatic cases
+               lambda = 0.1,       #proportion symptomatic requiring hospitalization
+               delta_1 = 1/6,      #1/time between symptom onset and hospitalization
+               delta_2 = 1/12,     #1/time between hospitalization and recovery
+               delta_3 = 1/9,      #1/time between hospitalization and mortality
+               mu = 0.14           #mortality rate of hospitalized cases
+)
+
+asym_runs <- bind_rows(lapply(1:n_sims, function(i){
+  as.data.frame(stoch.sim(init = init_vars, 
+                          trans = transitions, 
+                          rates = rates,
+                          pars = pars_asym,
+                          t_sim = sim_time)) %>% 
+    mutate(sim = i)
+  }))
+
+asym_runs %>% 
+  mutate(I = Is+Ia+H) %>% 
+  dplyr::select(time, I, sim) %>% 
+  ggplot(aes(x = time, y = I, group = as.factor(sim))) +
+    geom_line(size = 0.2, col = "grey50") +
+    theme_bw() +
+    labs(x="time",
+         y = "cases",
+         title = "infecteds through time, asymptomatic transmission only")
+
+```
+
+# Social distancing interventions   
+```{r sd_rates}
+rates_social_distance <- function(x, p, t) {
+  S = x['S']
+  E = x['E']
+  Ia = x['Ia']
+  Is = x['Is']
+  H = x['H']
+  R = x['R']
+  D = x["D"]
+  
+  N = p['N']             #population size
+  beta = p['beta']       #transmission rate
+  ca = p['ca']           #Relative contact rate between S and Ia
+  cs = p['cs']           #Relative contact rate between S and Is
+  ch = p['ch']           #Relative contact rate between S and H
+  c_red = p["c_red"]     #reduction in contact rate
+  gam = p['gam']         #1/serial interval
+  alpha = p['alpha']     #proportion asymptomatic
+  sigma = p['sigma']     #1/(incubation period-serial interval) to model pre-symptomatic transmission
+  rho_s = p['rho_s']     #Recovery rate of symptomatic cases
+  rho_a = p['rho_a']     #Recovery rate of asymptomatic cases
+  lambda =p['lambda']    #proportion symptomatic requiring hospitalization
+  delta_1 = p['delta_1'] #1/time between symptom onset and hospitalization
+  delta_2 = p['delta_2'] #1/time between hospitalization and recovery
+  delta_3 = p['delta_3'] #1/time between hospitalization and mortality
+  mu = p['mu']           #mortality rate of hospitalized cases
+
+  sd_start = p["sd_start"]
+  sd_end = p["sd_end"]
+  
+  rel_contact <- ifelse(t > sd_start & t < sd_end,
+                        c_red,
+                        1)
+  
+  return(c(S*beta*(Ia*ca+Is*cs+H*ch)*rel_contact/N, #Susceptible becomes exposed
+           E*gam,                       #Exposed becomes Infected, pre-/a-symptomatic
+           Ia*(1-alpha)*sigma,          #Infected, pre-/a-symptomatic becomes symptomatic
+           Ia*alpha*rho_a,              #Infected, pre-/a-symptomatic becomes recovered
+           Is*(1-lambda)*rho_s,         #Infected, symptomatic becomes recovered
+           Is*lambda*delta_1,           #Infected, symptomatic becomes hospitalized
+           H*mu*delta_3,                #Hospitalized dies
+           H*(1-mu)*delta_2))           #Hospitalized recovers
+}
+```
+
+## 3 Months with 60% reduction in contact rate  
+```{r sd.4_3mo_setup_sim}
+pars_sd.4_3mo <- c(N = pop_size,            #population size
+                   beta = 0.5,         #transmission rate
+                   ca = 1.0,           #Relative contact rate between S and Ia
+                   cs = 0.6,           #Relative contact rate between S and Is
+                   ch = 0.01,          #Relative contact rate between S and H
+                   gam = 1/4,          #1/serial interval
+                   alpha = 0.32,       #proportion asymptomatic
+                   sigma = 1/1.2,      #1/(incubation period-serial interval) to model pre-symptomatic transmission
+                   rho_s = 1/14,       #Recovery rate of symptomatic cases
+                   rho_a = 1/5,        #Recovery rate of asymptomatic cases
+                   lambda = 0.1,       #proportion symptomatic requiring hospitalization
+                   delta_1 = 1/6,      #1/time between symptom onset and hospitalization
+                   delta_2 = 1/12,     #1/time between hospitalization and recovery
+                   delta_3 = 1/9,      #1/time between hospitalization and mortality
+                   mu = 0.14,          #mortality rate of hospitalized cases
+                   c_red = 0.4,        #Relative contact rate for heavy social distancing
+                   sd_start = 30,    #Time step to start social distancing
+                   sd_end = 120       #Time step to end social distancing
+)
+
+sd.4_3mo_runs <- bind_rows(lapply(1:n_sims, function(i){
+  as.data.frame(stoch.sim(init = init_vars, 
+                          trans = transitions, 
+                          rates = rates_social_distance,
+                          pars = pars_sd.4_3mo,
+                          t_sim = sim_time)) %>% 
+    mutate(sim = i)
+  }))
+
+saveRDS(sd.4_3mo_runs, file = "../Outputs/adapTau_sd.4_3mo_runs.rds")
+
+```
+
+```{r sd.4_3mo_plot_cases}
+sd.4_3mo_runs %>% 
+  mutate(I = Is+Ia+H) %>% 
+  dplyr::select(time, I, sim) %>% 
+  ggplot(aes(x = time, y = I, group = as.factor(sim))) +
+    geom_line(size = 0.2, col = "grey50") +
+    theme_bw() +
+    ylim(c(0, I_max)) +
+    annotate(geom = "rect",
+             xmin = pars_sd.4_3mo["int_start"], xmax = pars_sd.4_3mo["int_end"],
+             ymin = 0, ymax = Inf,
+             fill = "darkgreen", alpha = 0.2) +
+    labs(x="time",
+         y = "cases",
+         title = "infecteds through time, heavy social distancing for 3 months")
+```
+
+```{r sd.4_3mo_plot_hosp}
+sd.4_3mo_runs %>% 
+  select(time, H, sim) %>% 
+  ggplot(aes(x = time, y = H, group = as.factor(sim))) +
+    geom_line(size = 0.2, col = "grey50") +
+    theme_bw() +
+    ylim(c(0, H_max)) +
+    annotate(geom = "rect",
+             xmin = pars_sd.4_3mo["int_start"], xmax = pars_sd.4_3mo["int_end"],
+             ymin = 0, ymax = Inf,
+             fill = "darkgreen", alpha = 0.2) +
+    labs(x="time",
+         y = "hospitalizations",
+         title = "hospitalizations through time, heavy social distancing for 3 months")
+```
+
+```{r sd.4_3mo_plot_deaths}
+sd.4_3mo_runs %>% 
+  select(time, D, sim) %>% 
+  ggplot(aes(x = time, y = D, group = as.factor(sim))) +
+    geom_line(size = 0.2, col = "grey50") +
+    theme_bw() +
+    ylim(c(0, D_max)) +
+    annotate(geom = "rect",
+             xmin = pars_sd.4_3mo["int_start"], xmax = pars_sd.4_3mo["int_end"],
+             ymin = 0, ymax = Inf,
+             fill = "darkgreen", alpha = 0.2) +
+    labs(x="time",
+         y = "deaths",
+         title = "deaths through time, heavy social distancing for 3 months")
+
+
+```
+
+## 10 months with 40% reduction in contact rate  
+```{r sd.6_10mo}
+pars_sd.6_10mo <- c(N = pop_size,            #population size
+                    beta = 0.5,         #transmission rate
+                    ca = 1.0,           #Relative contact rate between S and Ia
+                    cs = 0.6,           #Relative contact rate between S and Is
+                    ch = 0.01,          #Relative contact rate between S and H
+                    gam = 1/4,          #1/serial interval
+                    alpha = 0.32,       #proportion asymptomatic
+                    sigma = 1/1.2,      #1/(incubation period-serial interval) to model pre-symptomatic transmission
+                    rho_s = 1/14,       #Recovery rate of symptomatic cases
+                    rho_a = 1/5,        #Recovery rate of asymptomatic cases
+                    lambda = 0.1,       #proportion symptomatic requiring hospitalization
+                    delta_1 = 1/6,      #1/time between symptom onset and hospitalization
+                    delta_2 = 1/12,     #1/time between hospitalization and recovery
+                    delta_3 = 1/9,      #1/time between hospitalization and mortality
+                    mu = 0.14,          #mortality rate of hospitalized cases
+                    c_red = 0.6,        #Relative contact rate for heavy social distancing
+                    sd_start = 30,    #Time step to start social distancing
+                    sd_end = 330       #Time step to end social distancing
+)
+
+sd.6_10mo_runs <- bind_rows(lapply(1:n_sims, function(i){
+  as.data.frame(stoch.sim(init = init_vars, 
+                          trans = transitions, 
+                          rates = rates_social_distance,
+                          pars = pars_sd.6_10mo,
+                          t_sim = sim_time)) %>% 
+    mutate(sim = i)
+  }))
+
+saveRDS(sd.6_10mo_runs, file = "../Outputs/adapTau_sd.6_10mo_runs.rds")
+```
+
+```{r sd.6_10mo_plot_cases}
+sd.6_10mo_runs %>% 
+  mutate(I = Is+Ia+H) %>% 
+  dplyr::select(time, I, sim) %>% 
+  ggplot(aes(x = time, y = I, group = as.factor(sim))) +
+    geom_line(size = 0.2, col = "grey50") +
+    theme_bw() +
+    ylim(c(0, I_max)) +
+    annotate(geom = "rect",
+             xmin = pars_sd.6_10mo["int_start"], xmax = pars_sd.6_10mo["int_end"],
+             ymin = 0, ymax = Inf,
+             fill = "darkgreen", alpha = 0.2) +
+    labs(x="time",
+         y = "cases",
+         title = "infecteds through time, mild social distancing for 10 months")
+```
+
+```{r sd.6_10mo_plot_hosp}
+sd.6_10mo_runs %>% 
+  select(time, H, sim) %>% 
+  ggplot(aes(x = time, y = H, group = as.factor(sim))) +
+    geom_line(size = 0.2, col = "grey50") +
+    theme_bw() +
+    ylim(c(0, H_max)) +
+    annotate(geom = "rect",
+             xmin = pars_sd.6_10mo["int_start"], xmax = pars_sd.6_10mo["int_end"],
+             ymin = 0, ymax = Inf,
+             fill = "darkgreen", alpha = 0.2) +
+    labs(x="time",
+         y = "hospitalizations",
+         title = "hospitalizations through time, mild social distancing for 10 months")
+```
+
+```{r sd.6_10mo_plot_deaths}
+sd.6_10mo_runs %>% 
+  select(time, D, sim) %>% 
+  ggplot(aes(x = time, y = D, group = as.factor(sim))) +
+    geom_line(size = 0.2, col = "grey50") +
+    theme_bw() +
+    ylim(c(0, D_max)) +
+    annotate(geom = "rect",
+             xmin = pars_sd.6_10mo["int_start"], xmax = pars_sd.6_10mo["int_end"],
+             ymin = 0, ymax = Inf,
+             fill = "darkgreen", alpha = 0.2) +
+    labs(x="time",
+         y = "deaths",
+         title = "deaths through time, mild social distancing for 10 months")
+```
+
+## 10 months with 60% reduction in contact rate  
+```{r sd.4_10mo}
+pars_sd.4_10mo <- c(N = pop_size,            #population size
+                    beta = 0.5,         #transmission rate
+                    ca = 1.0,           #Relative contact rate between S and Ia
+                    cs = 0.6,           #Relative contact rate between S and Is
+                    ch = 0.01,          #Relative contact rate between S and H
+                    gam = 1/4,          #1/serial interval
+                    alpha = 0.32,       #proportion asymptomatic
+                    sigma = 1/1.2,      #1/(incubation period-serial interval) to model pre-symptomatic transmission
+                    rho_s = 1/14,       #Recovery rate of symptomatic cases
+                    rho_a = 1/5,        #Recovery rate of asymptomatic cases
+                    lambda = 0.1,       #proportion symptomatic requiring hospitalization
+                    delta_1 = 1/6,      #1/time between symptom onset and hospitalization
+                    delta_2 = 1/12,     #1/time between hospitalization and recovery
+                    delta_3 = 1/9,      #1/time between hospitalization and mortality
+                    mu = 0.14,          #mortality rate of hospitalized cases
+                    c_red = 0.4,        #Relative contact rate for heavy social distancing
+                    sd_start = 30,    #Time step to start social distancing
+                    sd_end = 330       #Time step to end social distancing
+)
+
+sd.4_10mo_runs <- bind_rows(lapply(1:n_sims, function(i){
+  as.data.frame(stoch.sim(init = init_vars, 
+                          trans = transitions, 
+                          rates = rates_social_distance,
+                          pars = pars_sd.4_10mo,
+                          t_sim = sim_time)) %>% 
+    mutate(sim = i)
+  }))
+
+saveRDS(sd.4_10mo_runs, file = "../Outputs/adapTau_sd.4_10mo_runs.rds")
+
+```
+
+```{r sd.4_10mo_plot_cases}
+sd.4_10mo_runs %>% 
+  mutate(I = Is+Ia+H) %>% 
+  dplyr::select(time, I, sim) %>% 
+  ggplot(aes(x = time, y = I, group = as.factor(sim))) +
+    geom_line(size = 0.2, col = "grey50") +
+    theme_bw() +
+    ylim(c(0, I_max)) +
+    annotate(geom = "rect",
+             xmin = pars_sd.4_10mo["int_start"], xmax = pars_sd.4_10mo["int_end"],
+             ymin = 0, ymax = Inf,
+             fill = "darkgreen", alpha = 0.2) +
+    labs(x="time",
+         y = "cases",
+         title = "infecteds through time, heavy social distancing for 10 months")
+```
+
+```{r sd.4_10mo_plot_hosp}
+sd.4_10mo_runs %>% 
+  select(time, H, sim) %>% 
+  ggplot(aes(x = time, y = H, group = as.factor(sim))) +
+    geom_line(size = 0.2, col = "grey50") +
+    theme_bw() +
+    ylim(c(0, H_max)) +
+    annotate(geom = "rect",
+             xmin = pars_sd.4_10mo["int_start"], xmax = pars_sd.4_10mo["int_end"],
+             ymin = 0, ymax = Inf,
+             fill = "darkgreen", alpha = 0.2) +
+    labs(x="time",
+         y = "hospitalizations",
+         title = "hospitalizations through time, heavy social distancing for 10 months")
+```
+
+```{r sd.4_10mo_plot_deaths}
+sd.4_10mo_runs %>% 
+  select(time, D, sim) %>% 
+  ggplot(aes(x = time, y = D, group = as.factor(sim))) +
+    geom_line(size = 0.2, col = "grey50") +
+    theme_bw() +
+    ylim(c(0, D_max)) +
+    annotate(geom = "rect",
+             xmin = pars_sd.4_10mo["int_start"], xmax = pars_sd.4_10mo["int_end"],
+             ymin = 0, ymax = Inf,
+             fill = "darkgreen", alpha = 0.2) +
+    labs(x="time",
+         y = "deaths",
+         title = "deaths through time, heavy social distancing for 10 months")
+```
+
+# Quarantining interventions  
+## What proportion of symptomatics need to be quarantined?  
+
+```{r q_rates}
+rates_quarantine <- function(x, p, t) {
+  S = x['S']
+  E = x['E']
+  Ia = x['Ia']
+  Is = x['Is']
+  H = x['H']
+  R = x['R']
+  D = x["D"]
+  
+  N = p['N']             #population size
+  beta = p['beta']       #transmission rate
+  ca = p['ca']           #Relative contact rate between S and Ia
+  cs = p['cs']           #Relative contact rate between S and Is
+  ch = p['ch']           #Relative contact rate between S and H
+  gam = p['gam']         #1/serial interval
+  alpha = p['alpha']     #proportion asymptomatic
+  sigma = p['sigma']     #1/(incubation period-serial interval) to model pre-symptomatic transmission
+  rho_s = p['rho_s']     #Recovery rate of symptomatic cases
+  rho_a = p['rho_a']     #Recovery rate of asymptomatic cases
+  lambda =p['lambda']    #proportion symptomatic requiring hospitalization
+  delta_1 = p['delta_1'] #1/time between symptom onset and hospitalization
+  delta_2 = p['delta_2'] #1/time between hospitalization and recovery
+  delta_3 = p['delta_3'] #1/time between hospitalization and mortality
+  mu = p['mu']           #mortality rate of hospitalized cases
+#Intervention parameters  
+  cs_red = p['cs_red']   #Reduction in contact with symptomatics due to quarantine
+  c_red1 = p["c_red1"]   #reduction in contact rate for first phase
+  c_red2 = p["c_red2"]   #reduction in contact rate for second phase
+#Timing parameters  
+  sd1_start = p["sd1_start"]
+  sd1_end = p["sd1_end"]
+  sd2_start = p["sd2_start"]
+  sd2_end = p["sd2_end"]
+#Set interventions based on intervention timepoints
+  c_red <- case_when(t > sd1_start & t < sd1_end ~ c_red1,
+                     t > sd2_start & t < sd2_end ~ c_red2,
+                     TRUE ~ 1)
+
+  cs_red <- ifelse(t > sd2_start & t < sd2_end,
+                   cs_red,
+                   1)
+    
+  return(c(S*beta*(Ia*ca+Is*cs*cs_red+H*ch)*c_red/N, #Susceptible becomes exposed
+           E*gam,                       #Exposed becomes Infected, pre-/a-symptomatic
+           Ia*(1-alpha)*sigma,          #Infected, pre-/a-symptomatic becomes symptomatic
+           Ia*alpha*rho_a,              #Infected, pre-/a-symptomatic becomes recovered
+           Is*(1-lambda)*rho_s,         #Infected, symptomatic becomes recovered
+           Is*lambda*delta_1,           #Infected, symptomatic becomes hospitalized
+           H*mu*delta_3,                #Hospitalized dies
+           H*(1-mu)*delta_2))           #Hospitalized recovers
+}
+```
+
+```{r q_pars_sim}
+pars_q.5 <- c(N = pop_size,       #population size
+              beta = 0.5,         #transmission rate
+              ca = 1.0,           #Relative contact rate between S and Ia
+              cs = 0.6,           #Relative contact rate between S and Is
+              ch = 0.01,          #Relative contact rate between S and H
+              gam = 1/4,          #1/serial interval
+              alpha = 0.32,       #proportion asymptomatic
+              sigma = 1/1.2,      #1/(incubation period-serial interval) to model pre-symptomatic transmission
+              rho_s = 1/14,       #Recovery rate of symptomatic cases
+              rho_a = 1/5,        #Recovery rate of asymptomatic cases
+              lambda = 0.1,       #proportion symptomatic requiring hospitalization
+              delta_1 = 1/6,      #1/time between symptom onset and hospitalization
+              delta_2 = 1/12,     #1/time between hospitalization and recovery
+              delta_3 = 1/9,      #1/time between hospitalization and mortality
+              mu = 0.14,          #mortality rate of hospitalized cases
+              cs_red = 0.5,         #reduction in mortality rate of hospitalized cases
+              c_red1 = 0.4,       #Relative contact rate for heavy social distancing
+              c_red2 = 0.6,       #Relative contact rate for heavy social distancing
+              sd1_start = 30,     #Time step to start heavy social distancing
+              sd1_end = 120,      #Time step to end heavy social distancing
+              sd2_start = 121,    #Time step to start light social distancing and quarantine
+              sd2_end = sim_time  #Time step to end light social distancing and quarantine
+)
+
+q.5_runs <- bind_rows(lapply(1:n_sims, function(i){
+  as.data.frame(stoch.sim(init = init_vars, 
+                          trans = transitions, 
+                          rates = rates_quarantine,
+                          pars = pars_q.5,
+                          t_sim = sim_time)) %>% 
+    mutate(sim = i)
+  }))
+
+saveRDS(q.5_runs, file = "../Outputs/adapTau_q.5_runs.rds")
+
+```
+
+```{r q.5_plot_cases}
+q.5_labs <- labs(x="time",
+                 title = "Social distancing+quarantine of symptomatics",
+                 subtitle = paste("  Reduction in symptomatic contact ", pars_q.5["cs_red"]))
+q.5_int_box1 <- annotate(geom = "rect",
+                         xmin = pars_q.5["sd1_start"], xmax = pars_q.5["sd1_end"],
+                         ymin = 0, ymax = Inf,
+                         fill = "darkgreen", alpha = 0.4)
+q.5_int_box2 <- annotate(geom = "rect",
+                         xmin = pars_q.5["sd2_start"], xmax = pars_q.5["sd2_end"],
+                         ymin = 0, ymax = Inf,
+                         fill = "darkgreen", alpha = 0.2)
+  
+
+q.5_runs %>% 
+  mutate(I = Is+Ia+H) %>% 
+  dplyr::select(time, I, sim) %>% 
+  ggplot(aes(x = time, y = I, group = as.factor(sim))) +
+    geom_line(size = 0.2, col = "grey50") +
+    theme_bw() +
+    ylim(c(0, I_max)) +
+    q.5_int_box1 +
+    q.5_int_box2 +
+    q.5_labs +
+    ylab("Infecteds")
+```
+
+```{r q.5_plot_hosp}
+q.5_runs %>% 
+  select(time, H, sim) %>% 
+  ggplot(aes(x = time, y = H, group = as.factor(sim))) +
+    geom_line(size = 0.2, col = "grey50") +
+    theme_bw() +
+    ylim(c(0, H_max)) +
+    q.5_int_box1 +
+    q.5_int_box2 +
+    q.5_labs +
+    ylab("Hospitalizations")
+```
+
+```{r q.5_plot_deaths}
+q.5_runs %>% 
+  select(time, D, sim) %>% 
+  ggplot(aes(x = time, y = D, group = as.factor(sim))) +
+    geom_line(size = 0.2, col = "grey50") +
+    theme_bw() +
+    ylim(c(0, D_max)) +
+    q.5_int_box1 +
+    q.5_int_box2 +
+    q.5_labs +
+    ylab("Deaths")
+```
+
+# Antiviral Treatment Scenarios  
+### For now assuming that antiviral treatment will become available 3 months into heavy social distancing intervention at which point social distancing is relaxed to light social distancing  
+
+## Scenario 1: Antivirals administered upon hospitalization, reduce the mortality rate  
+\begin{figure}[!h]
+\includegraphics[]{Mod_Schematic_Antiviral1.png}
+\end{figure}
+
+```{r av1_setup}
+rates_av1 <- function(x, p, t) {
+#State Variables  
+  S = x['S']
+  E = x['E']
+  Ia = x['Ia']
+  Is = x['Is']
+  H = x['H']
+  R = x['R']
+  D = x["D"]
+  
+#Base parameters  
+  N = p['N']             #population size
+  beta = p['beta']       #transmission rate
+  ca = p['ca']           #Relative contact rate between S and Ia
+  cs = p['cs']           #Relative contact rate between S and Is
+  ch = p['ch']           #Relative contact rate between S and H
+  gam = p['gam']         #1/serial interval
+  alpha = p['alpha']     #proportion asymptomatic
+  sigma = p['sigma']     #1/(incubation period-serial interval) to model pre-symptomatic transmission
+  rho_s = p['rho_s']     #Recovery rate of symptomatic cases
+  rho_a = p['rho_a']     #Recovery rate of asymptomatic cases
+  lambda =p['lambda']    #proportion symptomatic requiring hospitalization
+  delta_1 = p['delta_1'] #1/time between symptom onset and hospitalization
+  delta_2 = p['delta_2'] #1/time between hospitalization and recovery
+  delta_3 = p['delta_3'] #1/time between hospitalization and mortality
+  mu = p['mu']           #mortality rate of hospitalized cases
+#Intervention parameters  
+  eps1 = p['eps1']       #Reduction in mortality rate due to antiviral treatment
+  c_red1 = p["c_red1"]   #reduction in contact rate for first phase
+  c_red2 = p["c_red2"]   #reduction in contact rate for second phase
+#Timing parameters  
+  sd1_start = p["sd1_start"]
+  sd1_end = p["sd1_end"]
+  sd2_start = p["sd2_start"]
+  sd2_end = p["sd2_end"]
+#Set interventions based on intervention timepoints
+  rel_contact <- case_when(t > sd1_start & t < sd1_end ~ c_red1,
+                           t > sd2_start & t < sd2_end ~ c_red2,
+                           TRUE ~ 1)
+
+  av_mortality <- ifelse(t > sd2_start & t < sd2_end,
+                         eps1,
+                         1)
+#Return rates    
+  return(c(S*beta*(Ia*ca+Is*cs+H*ch)*rel_contact/N, #Susceptible becomes exposed
+           E*gam,                       #Exposed becomes Infected, pre-/a-symptomatic
+           Ia*(1-alpha)*sigma,          #Infected, pre-/a-symptomatic becomes symptomatic
+           Ia*alpha*rho_a,              #Infected, pre-/a-symptomatic becomes recovered
+           Is*(1-lambda)*rho_s,         #Infected, symptomatic becomes recovered
+           Is*lambda*delta_1,           #Infected, symptomatic becomes hospitalized
+           H*av_mortality*mu*delta_3,           #Hospitalized dies
+           H*(1-av_mortality*mu)*delta_2))      #Hospitalized recovers
+}
+
+pars_av1 <- c(N = pop_size,            #population size
+              beta = 0.5,         #transmission rate
+              ca = 1.0,           #Relative contact rate between S and Ia
+              cs = 0.6,           #Relative contact rate between S and Is
+              ch = 0.01,          #Relative contact rate between S and H
+              gam = 1/4,          #1/serial interval
+              alpha = 0.32,       #proportion asymptomatic
+              sigma = 1/1.2,      #1/(incubation period-serial interval) to model pre-symptomatic transmission
+              rho_s = 1/14,       #Recovery rate of symptomatic cases
+              rho_a = 1/5,        #Recovery rate of asymptomatic cases
+              lambda = 0.1,       #proportion symptomatic requiring hospitalization
+              delta_1 = 1/6,      #1/time between symptom onset and hospitalization
+              delta_2 = 1/12,     #1/time between hospitalization and recovery
+              delta_3 = 1/9,      #1/time between hospitalization and mortality
+              mu = 0.14,          #mortality rate of hospitalized cases
+              eps1 = 0.5,         #reduction in mortality rate of hospitalized cases
+              c_red1 = 0.4,       #Relative contact rate for heavy social distancing
+              c_red2 = 0.6,       #Relative contact rate for heavy social distancing
+              sd1_start = 30,     #Time step to start heavy social distancing
+              sd1_end = 120,      #Time step to end heavy social distancing
+              sd2_start = 121,    #Time step to start light social distancing and av treatment
+              sd2_end = sim_time  #Time step to end light social distancing and av treatment
+)
+
+```
+
+```{r av1_run}
+av1_runs <- bind_rows(lapply(1:n_sims, function(i){
+  as.data.frame(stoch.sim(init = init_vars, 
+                          trans = transitions, 
+                          rates = rates_av1,
+                          pars = pars_av1,
+                          t_sim = sim_time)) %>% 
+    mutate(sim = i)
+  }))
+
+saveRDS(av1_runs, file = "../Outputs/adapTau_av1_runs.rds")
+
+```
+
+```{r av1_plot_cases}
+av1_box1 <- annotate(geom = "rect",
+             xmin = pars_av1["sd1_start"], xmax = pars_av1["sd1_end"],
+             ymin = 0, ymax = Inf,
+             fill = "darkgreen", alpha = 0.4)
+av1_box2 <- annotate(geom = "rect",
+             xmin = pars_av1["sd2_start"], xmax = pars_av1["sd2_end"],
+             ymin = 0, ymax = Inf,
+             fill = "darkgreen", alpha = 0.2)
+
+
+av1_runs %>% 
+  mutate(I = Is+Ia+H) %>% 
+  dplyr::select(time, I, sim) %>% 
+  ggplot(aes(x = time, y = I, group = as.factor(sim))) +
+    geom_line(size = 0.2, col = "grey50") +
+    theme_bw() +
+    ylim(c(0, I_max)) +
+    av1_box1 +
+    av1_box2 +
+    labs(x="time",
+         y = "cases",
+         title = "infecteds through time, social distancing+antiviral treatment of hospitalized")
+```
+
+```{r av1_plot_hosp}
+av1_runs %>% 
+  select(time, H, sim) %>% 
+  ggplot(aes(x = time, y = H, group = as.factor(sim))) +
+    geom_line(size = 0.2, col = "grey50") +
+    theme_bw() +
+    ylim(c(0, H_max)) +
+    av1_box1 +
+    av1_box2 +
+    labs(x="time",
+         y = "hospitalizations",
+         title = "infecteds through time, social distancing+antiviral treatment of hospitalized")
+```
+
+```{r av1_plot_deaths}
+av1_runs %>% 
+  select(time, D, sim) %>% 
+  ggplot(aes(x = time, y = D, group = as.factor(sim))) +
+    geom_line(size = 0.2, col = "grey50") +
+    theme_bw() +
+    ylim(c(0, D_max)) +
+    av1_box1 +
+    av1_box2 +
+    labs(x="time",
+         y = "deaths",
+         title = "infecteds through time, social distancing+antiviral treatment of hospitalized")
+
+```
+
+
+## Scenario 2: Antivirals administered upon symptom onset, reduce the hospitalization rate  
+\begin{figure}[!h]
+\includegraphics[]{Mod_Schematic_Antiviral2.png}
+\end{figure}
+
+```{r av2_setup}
+rates_av2 <- function(x, p, t) {
+#State Variables  
+  S = x['S']
+  E = x['E']
+  Ia = x['Ia']
+  Is = x['Is']
+  H = x['H']
+  R = x['R']
+  D = x["D"]
+  
+#Base parameters  
+  N = p['N']             #population size
+  beta = p['beta']       #transmission rate
+  ca = p['ca']           #Relative contact rate between S and Ia
+  cs = p['cs']           #Relative contact rate between S and Is
+  ch = p['ch']           #Relative contact rate between S and H
+  gam = p['gam']         #1/serial interval
+  alpha = p['alpha']     #proportion asymptomatic
+  sigma = p['sigma']     #1/(incubation period-serial interval) to model pre-symptomatic transmission
+  rho_s = p['rho_s']     #Recovery rate of symptomatic cases
+  rho_a = p['rho_a']     #Recovery rate of asymptomatic cases
+  lambda =p['lambda']    #proportion symptomatic requiring hospitalization
+  delta_1 = p['delta_1'] #1/time between symptom onset and hospitalization
+  delta_2 = p['delta_2'] #1/time between hospitalization and recovery
+  delta_3 = p['delta_3'] #1/time between hospitalization and mortality
+  mu = p['mu']           #mortality rate of hospitalized cases
+#Intervention parameters  
+  eps2 = p['eps2']       #Reduction in hospitalization rate due to antiviral treatment
+  c_red1 = p["c_red1"]   #reduction in contact rate for first phase
+  c_red2 = p["c_red2"]   #reduction in contact rate for second phase
+#Timing parameters  
+  sd1_start = p["sd1_start"]
+  sd1_end = p["sd1_end"]
+  sd2_start = p["sd2_start"]
+  sd2_end = p["sd2_end"]
+#Set interventions based on intervention timepoints
+  rel_contact <- case_when(t > sd1_start & t < sd1_end ~ c_red1,
+                           t > sd2_start & t < sd2_end ~ c_red2,
+                           TRUE ~ 1)
+
+  av_hospitalized <- ifelse(t > sd2_start & t < sd2_end,
+                            eps2,
+                            1)
+#Return rates    
+  return(c(S*beta*(Ia*ca+Is*cs+H*ch)*rel_contact/N, #Susceptible becomes exposed
+           E*gam,                       #Exposed becomes Infected, pre-/a-symptomatic
+           Ia*(1-alpha)*sigma,          #Infected, pre-/a-symptomatic becomes symptomatic
+           Ia*alpha*rho_a,              #Infected, pre-/a-symptomatic becomes recovered
+           Is*(1-lambda*av_hospitalized)*rho_s,         #Infected, symptomatic becomes recovered
+           Is*lambda*av_hospitalized*delta_1,           #Infected, symptomatic becomes hospitalized
+           H*mu*delta_3,           #Hospitalized dies
+           H*(1-mu)*delta_2))      #Hospitalized recovers
+}
+
+pars_av2 <- c(N = pop_size,            #population size
+              beta = 0.5,         #transmission rate
+              ca = 1.0,           #Relative contact rate between S and Ia
+              cs = 0.6,           #Relative contact rate between S and Is
+              ch = 0.01,          #Relative contact rate between S and H
+              gam = 1/4,          #1/serial interval
+              alpha = 0.32,       #proportion asymptomatic
+              sigma = 1/1.2,      #1/(incubation period-serial interval) to model pre-symptomatic transmission
+              rho_s = 1/14,       #Recovery rate of symptomatic cases
+              rho_a = 1/5,        #Recovery rate of asymptomatic cases
+              lambda = 0.1,       #proportion symptomatic requiring hospitalization
+              delta_1 = 1/6,      #1/time between symptom onset and hospitalization
+              delta_2 = 1/12,     #1/time between hospitalization and recovery
+              delta_3 = 1/9,      #1/time between hospitalization and mortality
+              mu = 0.14,          #mortality rate of hospitalized cases
+              eps2 = 0.5,         #reduction in hospitalization rate of symptomatic cases
+              c_red1 = 0.4,       #Relative contact rate for heavy social distancing
+              c_red2 = 0.6,       #Relative contact rate for light social distancing
+              sd1_start = 30,     #Time step to start heavy social distancing
+              sd1_end = 120,      #Time step to end heavy social distancing
+              sd2_start = 121,    #Time step to start light social distancing and av treatment
+              sd2_end = sim_time  #Time step to end light social distancing and av treatment
+)
+
+```
+
+```{r av2_run}
+av2_runs <- bind_rows(lapply(1:n_sims, function(i){
+  as.data.frame(stoch.sim(init = init_vars, 
+                          trans = transitions, 
+                          rates = rates_av2,
+                          pars = pars_av2,
+                          t_sim = sim_time)) %>% 
+    mutate(sim = i)
+  }))
+
+saveRDS(av2_runs, file = "../Outputs/adapTau_av2_runs.rds")
+
+```
+
+```{r av2_plot_cases}
+av2_labs <- labs(x="time",
+                 title = "Social distancing+antiviral treatment of symptomatic",
+                 subtitle = paste("  Reduction in hospitalization rate of ", pars_av2["eps2"]))
+av2_box1 <- annotate(geom = "rect",
+                     xmin = pars_av2["sd1_start"], xmax = pars_av2["sd1_end"],
+                     ymin = 0, ymax = Inf,
+                     fill = "darkgreen", alpha = 0.4) 
+av2_box2 <- annotate(geom = "rect",
+                     xmin = pars_av2["sd2_start"], xmax = pars_av2["sd2_end"],
+                     ymin = 0, ymax = Inf,
+                     fill = "darkgreen", alpha = 0.2)
+
+
+
+av2_runs %>% 
+  mutate(I = Is+Ia+H) %>% 
+  dplyr::select(time, I, sim) %>% 
+  ggplot(aes(x = time, y = I, group = as.factor(sim))) +
+    geom_line(size = 0.2, col = "grey50") +
+    theme_bw() +
+    ylim(c(0, I_max)) +
+    av2_box1 +
+    av2_box2 +
+    av2_labs +
+    ylab("Infecteds")
+```
+
+```{r av2_plot_hosp}
+av2_runs %>% 
+  select(time, H, sim) %>% 
+  ggplot(aes(x = time, y = H, group = as.factor(sim))) +
+    geom_line(size = 0.2, col = "grey50") +
+    theme_bw() +
+    ylim(c(0, H_max)) +
+    av2_box1 +
+    av2_box2 +
+    av2_labs +
+    ylab("Hospitalizations")
+```
+
+```{r av2_plot_deaths}
+av2_runs %>% 
+  select(time, D, sim) %>% 
+  ggplot(aes(x = time, y = D, group = as.factor(sim))) +
+    geom_line(size = 0.2, col = "grey50") +
+    theme_bw() +
+    ylim(c(0, D_max)) +
+    av2_box1 +
+    av2_box2 +
+    av2_labs +
+    ylab("Deaths")
+
+```
+
+## Scenario 3: Antivirals administered upon exposure, suppress viral load to prevent transmission and progression to infectious    
+\begin{figure}[!h]
+\includegraphics[]{Mod_Schematic_Antiviral3.png}
+\end{figure}
+
+```{r av3_setup}
+trans_av3 = list(
+  c(S = -1, E = 1),     #Susceptible becomes exposed
+  c(E = -1, R = 1),     #Exposed becomes recovered due to prohylactic treatment
+  c(E = -1, Ia = 1),    #Exposed becomes Infected, pre- or a-symptomatic
+  c(Ia = -1, Is = 1),   #Infected, pre- or a-symptomatic becomes symptomatic
+  c(Ia = -1, R = 1),    #Infected, pre- or a-symptomatic becomes recovered
+  c(Is = -1, R = 1),    #Infected, symptoatmic recovers
+  c(Is = -1, H = 1),    #Infected, symptomatic becomes hospitalized
+  c(H = -1, D = 1),     #Hospitalized, severe becomes Dead
+  c(H = -1, R = 1))     #Hospitalized becomes recovered
+
+
+rates_av3 <- function(x, p, t) {
+#State Variables  
+  S = x['S']
+  E = x['E']
+  Ia = x['Ia']
+  Is = x['Is']
+  H = x['H']
+  R = x['R']
+  D = x["D"]
+  
+#Base parameters  
+  N = p['N']             #population size
+  beta = p['beta']       #transmission rate
+  ca = p['ca']           #Relative contact rate between S and Ia
+  cs = p['cs']           #Relative contact rate between S and Is
+  ch = p['ch']           #Relative contact rate between S and H
+  gam = p['gam']         #1/serial interval
+  alpha = p['alpha']     #proportion asymptomatic
+  sigma = p['sigma']     #1/(incubation period-serial interval) to model pre-symptomatic transmission
+  rho_s = p['rho_s']     #Recovery rate of symptomatic cases
+  rho_a = p['rho_a']     #Recovery rate of asymptomatic cases
+  lambda =p['lambda']    #proportion symptomatic requiring hospitalization
+  delta_1 = p['delta_1'] #1/time between symptom onset and hospitalization
+  delta_2 = p['delta_2'] #1/time between hospitalization and recovery
+  delta_3 = p['delta_3'] #1/time between hospitalization and mortality
+  mu = p['mu']           #mortality rate of hospitalized cases
+#Intervention parameters  
+  eps3 = p['eps3']       #Proportion of exposed prevented from becoming infectious due to antiviral treatment
+  c_red1 = p["c_red1"]   #reduction in contact rate for first phase
+  c_red2 = p["c_red2"]   #reduction in contact rate for second phase
+#Timing parameters  
+  sd1_start = p["sd1_start"]
+  sd1_end = p["sd1_end"]
+  sd2_start = p["sd2_start"]
+  sd2_end = p["sd2_end"]
+#Set interventions based on intervention timepoints
+  rel_contact <- case_when(t > sd1_start & t < sd1_end ~ c_red1,
+                           t > sd2_start & t < sd2_end ~ c_red2,
+                           TRUE ~ 1)
+
+  E_diverted <- ifelse(t > sd2_start & t < sd2_end,
+                       eps3,
+                       0)
+#Return rates    
+  return(c(S*beta*(Ia*ca+Is*cs+H*ch)*rel_contact/N, #Susceptible becomes exposed
+           E*E_diverted*gam,            #Exposed diverted to recovered through prophylaxis
+           E*(1-E_diverted)*gam,                    #Exposed becomes Infected, pre-/a-symptomatic
+           Ia*(1-alpha)*sigma,          #Infected, pre-/a-symptomatic becomes symptomatic
+           Ia*alpha*rho_a,              #Infected, pre-/a-symptomatic becomes recovered
+           Is*(1-lambda)*rho_s,         #Infected, symptomatic becomes recovered
+           Is*lambda*delta_1,           #Infected, symptomatic becomes hospitalized
+           H*mu*delta_3,           #Hospitalized dies
+           H*(1-mu)*delta_2))      #Hospitalized recovers
+}
+
+pars_av3 <- c(N = pop_size,            #population size
+              beta = 0.5,         #transmission rate
+              ca = 1.0,           #Relative contact rate between S and Ia
+              cs = 0.6,           #Relative contact rate between S and Is
+              ch = 0.01,          #Relative contact rate between S and H
+              gam = 1/4,          #1/serial interval
+              alpha = 0.32,       #proportion asymptomatic
+              sigma = 1/1.2,      #1/(incubation period-serial interval) to model pre-symptomatic transmission
+              rho_s = 1/14,       #Recovery rate of symptomatic cases
+              rho_a = 1/5,        #Recovery rate of asymptomatic cases
+              lambda = 0.1,       #proportion symptomatic requiring hospitalization
+              delta_1 = 1/6,      #1/time between symptom onset and hospitalization
+              delta_2 = 1/12,     #1/time between hospitalization and recovery
+              delta_3 = 1/9,      #1/time between hospitalization and mortality
+              mu = 0.14,          #mortality rate of hospitalized cases
+              eps3 = 0.5,         #proportion exposed diverted from infected pathway
+              c_red1 = 0.4,       #Relative contact rate for heavy social distancing
+              c_red2 = 0.6,       #Relative contact rate for light social distancing
+              sd1_start = 30,     #Time step to start heavy social distancing
+              sd1_end = 120,      #Time step to end heavy social distancing
+              sd2_start = 121,    #Time step to start light social distancing and av treatment
+              sd2_end = sim_time  #Time step to end light social distancing and av treatment
+)
+
+```
+
+```{r av3_run}
+av3_runs <- bind_rows(lapply(1:n_sims, function(i){
+  as.data.frame(stoch.sim(init = init_vars, 
+                          trans = trans_av3, 
+                          rates = rates_av3,
+                          pars = pars_av3,
+                          t_sim = sim_time)) %>% 
+    mutate(sim = i)
+  }))
+
+saveRDS(av3_runs, file = "../Outputs/adapTau_av3_runs.rds")
+
+```
+
+```{r av3_plot_cases}
+av3_labs <- labs(x="time",
+                 title = "Social distancing+antiviral treatment of exposed",
+                 subtitle = paste("  Reduction in infectious rate of ", pars_av3["eps3"]))
+av3_box1 <- annotate(geom = "rect",
+                     xmin = pars_av3["sd1_start"], xmax = pars_av3["sd1_end"],
+                     ymin = 0, ymax = Inf,
+                     fill = "darkgreen", alpha = 0.4)
+av3_box2 <- annotate(geom = "rect",
+                     xmin = pars_av3["sd2_start"], xmax = pars_av3["sd2_end"],
+                     ymin = 0, ymax = Inf,
+                     fill = "darkgreen", alpha = 0.2)
+
+
+av3_runs %>% 
+  mutate(I = Is+Ia+H) %>% 
+  dplyr::select(time, I, sim) %>% 
+  ggplot(aes(x = time, y = I, group = as.factor(sim))) +
+    geom_line(size = 0.2, col = "grey50") +
+    theme_bw() +
+    ylim(c(0, I_max)) +
+    av3_box1 +
+    av3_box2 +
+    av3_labs +
+    ylab("Infecteds")
+```
+
+```{r av3_plot_hosp}
+av3_runs %>% 
+  select(time, H, sim) %>% 
+  ggplot(aes(x = time, y = H, group = as.factor(sim))) +
+    geom_line(size = 0.2, col = "grey50") +
+    theme_bw() +
+    ylim(c(0, H_max)) +
+    av3_box1 +
+    av3_box2 +
+    av3_labs +
+    ylab("Hospitalizations")
+```
+
+```{r av3_plot_deaths}
+av3_runs %>% 
+  select(time, D, sim) %>% 
+  ggplot(aes(x = time, y = D, group = as.factor(sim))) +
+    geom_line(size = 0.2, col = "grey50") +
+    theme_bw() +
+    ylim(c(0, D_max)) +
+    av3_box1 +
+    av3_box2 +
+    av3_labs +
+    ylab("Deaths")
+
+```
+
+
+# Vaccination Scenarios    
+```{r vx_rates}
+trans_vax = list(
+  c(S = -1, E = 1),     #Susceptible becomes exposed
+  c(S = -1, V = 1),     #Susceptible is vaccinated 
+  c(E = -1, Ia = 1),    #Exposed becomes Infected, pre- or a-symptomatic
+  c(Ia = -1, Is = 1),   #Infected, pre- or a-symptomatic becomes symptomatic
+  c(Ia = -1, R = 1),    #Infected, pre- or a-symptomatic becomes recovered
+  c(Is = -1, R = 1),    #Infected, symptoatmic recovers
+  c(Is = -1, H = 1),    #Infected, symptomatic becomes hospitalized
+  c(H = -1, D = 1),     #Hospitalized, severe becomes Dead
+  c(H = -1, R = 1))     #Hospitalized becomes recovered
+
+rates <- function(x, p, t) {
+  S = x['S']
+  E = x['E']
+  Ia = x['Ia']
+  Is = x['Is']
+  H = x['H']
+  R = x['R']
+  V = x["V"]
+  D = x["D"]
+  
+  N = p['N']             #population size
+  beta = p['beta']       #transmission rate
+  ca = p['ca']           #Relative contact rate between S and Ia
+  cs = p['cs']           #Relative contact rate between S and Is
+  ch = p['ch']           #Relative contact rate between S and H
+  gam = p['gam']         #1/serial interval
+  alpha = p['alpha']     #proportion asymptomatic
+  sigma = p['sigma']     #1/(incubation period-serial interval) to model pre-symptomatic transmission
+  rho_s = p['rho_s']     #Recovery rate of symptomatic cases
+  rho_a = p['rho_a']     #Recovery rate of asymptomatic cases
+  lambda =p['lambda']    #proportion symptomatic requiring hospitalization
+  delta_1 = p['delta_1'] #1/time between symptom onset and hospitalization
+  delta_2 = p['delta_2'] #1/time between hospitalization and recovery
+  delta_3 = p['delta_3'] #1/time between hospitalization and mortality
+  mu = p['mu']           #mortality rate of hospitalized cases
+
+  return(c(S*beta*(Ia*ca+Is*cs+H*ch)/N, #Susceptible becomes exposed
+           E*gam,                       #Exposed becomes Infected, pre-/a-symptomatic
+           Ia*(1-alpha)*sigma,          #Infected, pre-/a-symptomatic becomes symptomatic
+           Ia*alpha*rho_a,              #Infected, pre-/a-symptomatic becomes recovered
+           Is*(1-lambda)*rho_s,         #Infected, symptomatic becomes recovered
+           Is*lambda*delta_1,           #Infected, symptomatic becomes hospitalized
+           H*mu*delta_3,                #Hospitalized dies
+           H*(1-mu)*delta_2))           #Hospitalized recovers
+}
+
+```
+
+### Vaccine available within 12 months  
+```{r}
+
+```
+
